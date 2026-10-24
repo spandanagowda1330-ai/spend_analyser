@@ -3,6 +3,7 @@
 Upload a bank or credit-card statement and the app finds your subscriptions, flags double charges and price rises, shows where your money goes, and suggests where you could save. It reads statements as they come from the bank, with no reformatting.
 
 ![Dashboard](docs/dashboard.png)
+![Charts](docs/charts.png)
 
 ## The problem
 
