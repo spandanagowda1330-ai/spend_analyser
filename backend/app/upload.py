@@ -1,70 +1,66 @@
-import io
+from collections import Counter
 
-import pandas as pd
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from sqlalchemy.orm import Session
 
 from .db import get_db
 from .models import Transaction
+from .parsing import StatementError, parse_statement
 
 router = APIRouter()
 
-REQUIRED_COLUMNS = {"date", "description", "amount"}
+ALLOWED = (".csv", ".txt", ".xlsx", ".xlsm")
 
 
 @router.post("/upload")
-async def upload_csv(file: UploadFile = File(...), db: Session = Depends(get_db)):
-    if not file.filename.lower().endswith(".csv"):
-        raise HTTPException(status_code=400, detail="Please upload a .csv file")
+async def upload_statement(
+    file: UploadFile = File(...),
+    spend_sign: str = Form("auto"),
+    date_order: str = Form("auto"),
+    db: Session = Depends(get_db),
+):
+    filename = file.filename or ""
+    if not filename.lower().endswith(ALLOWED):
+        raise HTTPException(status_code=400, detail="Please upload a .csv or .xlsx file")
 
     content = await file.read()
     try:
-        df = pd.read_csv(io.BytesIO(content))
-    except Exception:
-        raise HTTPException(status_code=400, detail="Could not read the CSV file")
+        frame, info = parse_statement(content, filename, spend_sign, date_order)
+    except StatementError as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
-    df.columns = [c.strip().lower() for c in df.columns]
-    missing = REQUIRED_COLUMNS - set(df.columns)
-    if missing:
-        raise HTTPException(
-            status_code=400, detail=f"Missing columns: {sorted(missing)}"
-        )
+    rows = [
+        (r.date, str(r.description)[:255], round(float(r.amount), 2))
+        for r in frame.itertuples()
+    ]
 
-    df["date"] = pd.to_datetime(df["date"], errors="coerce")
-    df["amount"] = pd.to_numeric(df["amount"], errors="coerce")
-    valid = df.dropna(subset=["date", "description", "amount"])
-    skipped_invalid = len(df) - len(valid)
-
-    existing = {
-        (d, desc, float(amt))
-        for d, desc, amt in db.query(
+    # Duplicate protection that still keeps genuine repeats: if the same purchase
+    # appears twice on one day (two coffees), both are kept. A second upload of the
+    # same file adds nothing, because the database already holds that many.
+    in_db = Counter(
+        (d, desc, round(float(a), 2))
+        for d, desc, a in db.query(
             Transaction.date, Transaction.raw_description, Transaction.amount
         ).all()
-    }
-
+    )
+    seen = Counter()
     new_rows = []
     skipped_duplicates = 0
-    for row in valid.itertuples():
-        key = (row.date.date(), str(row.description).strip(), float(row.amount))
-        if key in existing:
+    for key in rows:
+        seen[key] += 1
+        if seen[key] <= in_db[key]:
             skipped_duplicates += 1
             continue
-        existing.add(key)
-        new_rows.append(
-            Transaction(
-                date=key[0],
-                raw_description=key[1][:255],
-                amount=key[2],
-            )
-        )
+        new_rows.append(Transaction(date=key[0], raw_description=key[1], amount=key[2]))
 
     db.add_all(new_rows)
     db.commit()
 
     return {
         "imported": len(new_rows),
-        "skipped_invalid": skipped_invalid,
+        "skipped_invalid": info["rows_skipped"],
         "skipped_duplicates": skipped_duplicates,
+        "detected": info,
     }
 
 

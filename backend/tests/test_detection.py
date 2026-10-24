@@ -32,13 +32,8 @@ def test_yearly_charges_are_detected():
 
 
 def test_irregular_dates_are_not_a_subscription():
-    dates = [
-        date(2026, 1, 3),
-        date(2026, 1, 19),
-        date(2026, 2, 2),
-        date(2026, 3, 28),
-        date(2026, 4, 1),
-    ]
+    dates = [date(2026, 1, 3), date(2026, 1, 19), date(2026, 2, 2),
+             date(2026, 3, 28), date(2026, 4, 1)]
     assert detect_frequency(dates) is None
 
 

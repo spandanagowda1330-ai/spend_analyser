@@ -82,6 +82,7 @@ td.num, th.num { text-align: right; }
 .list li { display: flex; justify-content: space-between; gap: 12px; padding: 9px 0; border-bottom: 1px solid var(--border); font-size: 0.93rem; }
 .list li:last-child { border-bottom: none; }
 .muted { color: var(--muted); }
+.small { font-size: 0.8rem; }
 .empty { text-align: center; padding: 50px 16px; }
 
 .insights-head { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 8px; flex-wrap: wrap; }
@@ -91,3 +92,26 @@ td.num, th.num { text-align: right; }
 .insights .badge { flex-shrink: 0; margin-top: 2px; white-space: nowrap; }
 .insight-text { flex: 1; }
 .save { color: var(--good); white-space: nowrap; }
+
+.actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.btn-secondary {
+  background: transparent; color: var(--text); border: 1px solid var(--border);
+  padding: 9px 14px; border-radius: 8px; font-weight: 600; cursor: pointer;
+}
+.btn-secondary:disabled { opacity: 0.5; cursor: default; }
+.options { position: relative; }
+.options summary {
+  list-style: none; cursor: pointer; padding: 9px 14px; border: 1px solid var(--border);
+  border-radius: 8px; font-weight: 600; user-select: none;
+}
+.options summary::-webkit-details-marker { display: none; }
+.options-body {
+  position: absolute; right: 0; top: calc(100% + 6px); z-index: 5; min-width: 270px;
+  background: var(--card); border: 1px solid var(--border); border-radius: 10px;
+  padding: 12px; display: grid; gap: 10px; box-shadow: 0 8px 24px rgba(0, 0, 0, 0.12);
+}
+.options-body label { display: grid; gap: 4px; font-size: 0.85rem; color: var(--muted); }
+.options-body select {
+  padding: 7px 8px; border-radius: 6px; border: 1px solid var(--border);
+  background: var(--card); color: var(--text); font-size: 0.9rem;
+}

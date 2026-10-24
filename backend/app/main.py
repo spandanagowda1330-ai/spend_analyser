@@ -7,6 +7,7 @@ from .subscriptions import router as subscriptions_router
 from .categorize import router as categorize_router
 from .analytics import router as analytics_router
 from .insights import router as insights_router
+from .admin import router as admin_router
 
 Base.metadata.create_all(bind=engine)
 
@@ -24,6 +25,7 @@ app.include_router(subscriptions_router)
 app.include_router(categorize_router)
 app.include_router(analytics_router)
 app.include_router(insights_router)
+app.include_router(admin_router)
 
 
 @app.get("/health")

@@ -6,3 +6,4 @@ pydantic-settings
 pandas
 openai
 python-multipart
+openpyxl

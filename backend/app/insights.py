@@ -10,20 +10,20 @@ from .analytics import spikes
 from .config import settings
 from .db import get_db
 from .models import Insight, Subscription, Transaction
-from .subscriptions import CHARGES_PER_YEAR
+from .subscriptions import CHARGES_PER_YEAR, kind_of, split_extras
 
 router = APIRouter()
 
 VIDEO_STREAMING = {
     "Netflix", "Disney+", "Hulu", "Prime Video", "Hbo Max", "Peacock",
-    "Paramount+", "Apple Tv", "Hotstar",
+    "Paramount+", "Apple Tv", "Hotstar", "SonyLIV", "Zee5", "Amazon Prime",
 }
 
 POLISH_PROMPT = (
     "You are a friendly personal-finance assistant. You will receive a JSON "
     "array of short insights about a user's spending. Rewrite each one in a "
     "warm, clear tone, at most 2 sentences, and include one concrete next "
-    "step. Keep every dollar amount, percentage, date and merchant name "
+    "step. Keep every money amount, percentage, date and merchant name "
     "exactly as given. Never add new numbers or facts. Reply with ONLY a "
     'JSON object like {"messages": [...]} containing the same number of '
     "items in the same order."
@@ -31,7 +31,7 @@ POLISH_PROMPT = (
 
 
 def money(x: float) -> str:
-    return f"${x:,.2f}"
+    return f"{settings.currency_symbol}{x:,.2f}"
 
 
 def annual_cost(s: Subscription) -> float:
@@ -42,6 +42,27 @@ def build_insights(db: Session) -> list[dict]:
     insights: list[dict] = []
     subs = db.query(Subscription).all()
     active = [s for s in subs if s.status == "active"]
+
+    # 0. Extra / double charges
+    for s in subs:
+        ordered = sorted(s.transactions, key=lambda t: t.date)
+        _kept, extras = split_extras(ordered)
+        if extras:
+            total_extra = sum(float(t.amount) for t in extras)
+            when = ", ".join(sorted({str(t.date) for t in extras}))
+            plural = "s" if len(extras) > 1 else ""
+            insights.append(
+                {
+                    "type": "duplicate",
+                    "message": (
+                        f"{s.merchant} charged you {len(extras)} extra time{plural} "
+                        f"on top of its normal billing ({when}), adding up to "
+                        f"{money(total_extra)}. This may be double billing or a charge "
+                        f"after cancelling, so ask for a refund."
+                    ),
+                    "savings": None,
+                }
+            )
 
     # 1. Overlapping video streaming services
     streaming = sorted(
@@ -106,9 +127,10 @@ def build_insights(db: Session) -> list[dict]:
             )
 
     # 3. Most expensive subscription
-    if len(active) >= 2:
-        biggest = max(active, key=annual_cost)
-        total = sum(annual_cost(s) for s in active)
+    paid_subs = [s for s in active if kind_of(s) == "subscription"]
+    if len(paid_subs) >= 2:
+        biggest = max(paid_subs, key=annual_cost)
+        total = sum(annual_cost(s) for s in paid_subs)
         insights.append(
             {
                 "type": "review",
@@ -177,7 +199,7 @@ def build_insights(db: Session) -> list[dict]:
         )
 
     # Biggest savings first (sort is stable, so the rest keep their order)
-    insights.sort(key=lambda i: i["savings"] or 0, reverse=True)
+    insights.sort(key=lambda i: (i["type"] != "duplicate", -(i["savings"] or 0)))
     return insights
 
 
@@ -197,10 +219,11 @@ def polish_with_openai(messages: list[str]) -> list[str]:
     if len(polished) != len(messages):
         raise ValueError("Model returned the wrong number of messages")
 
+    amount_pattern = re.escape(settings.currency_symbol) + r"[\d,]+(?:\.\d+)?|\d+%"
     result = []
     for original, new in zip(messages, polished):
-        # Every dollar amount and percentage must survive the rewrite
-        facts = re.findall(r"\$[\d,]+(?:\.\d+)?|\d+%", original)
+        # Every money amount and percentage must survive the rewrite
+        facts = re.findall(amount_pattern, original)
         ok = isinstance(new, str) and all(f in new for f in facts)
         result.append(new if ok else original)
     return result

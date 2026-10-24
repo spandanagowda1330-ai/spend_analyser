@@ -7,23 +7,15 @@ from sqlalchemy.orm import Session
 
 from .config import settings
 from .db import get_db
+from .merchants import guess_category
 from .models import MerchantCategory, Transaction
 
 router = APIRouter()
 
 CATEGORIES = [
     "Groceries", "Dining", "Transport", "Entertainment", "Shopping",
-    "Utilities", "Health & Fitness", "Software", "Travel", "Other",
+    "Utilities", "Health & Fitness", "Software", "Education", "Housing", "Cash", "Travel", "Other",
 ]
-
-FALLBACK = {
-    "Netflix": "Entertainment", "Spotify": "Entertainment",
-    "Disney+": "Entertainment", "Hulu": "Entertainment",
-    "Anytime Fitness": "Health & Fitness", "Adobe": "Software",
-    "iCloud": "Software", "Uber": "Transport", "Shell": "Transport",
-    "Starbucks": "Dining", "Chipotle": "Dining", "Swiggy": "Dining",
-    "Whole Foods": "Groceries", "Amazon": "Shopping",
-}
 
 SYSTEM_PROMPT = (
     "You categorize merchant names from bank statements. "
@@ -58,9 +50,14 @@ def categorize_with_openai(merchants: list[str]) -> dict[str, str]:
 
 @router.post("/categorize")
 def categorize(db: Session = Depends(get_db)):
-    merchants = [
-        m for (m,) in db.query(Transaction.merchant).distinct().all() if m
-    ]
+    # one example of the original bank text per merchant, used as a hint
+    samples = dict(
+        db.query(Transaction.merchant, func.min(Transaction.raw_description))
+        .filter(Transaction.merchant.isnot(None))
+        .group_by(Transaction.merchant)
+        .all()
+    )
+    merchants = list(samples)
     if not merchants:
         raise HTTPException(
             status_code=400, detail="No merchants found. Call /process first."
@@ -77,14 +74,16 @@ def categorize(db: Session = Depends(get_db)):
             try:
                 new = categorize_with_openai(todo)
                 source = "openai"
-            except Exception as e:
+                # Only paid AI answers are cached. Rule-based guesses are recomputed
+                # each time, so improving the rules improves old data too.
+                for merchant, category in new.items():
+                    db.add(MerchantCategory(merchant=merchant, category=category))
+            except Exception as e:  # network, bad key, no credit, ...
                 error = str(e)[:300]
+                new = None
         if new is None:
-            new = {m: FALLBACK.get(m, "Other") for m in todo}
+            new = {m: guess_category(m, samples[m]) for m in todo}
             source = "fallback"
-
-        for merchant, category in new.items():
-            db.add(MerchantCategory(merchant=merchant, category=category))
         cached.update(new)
         db.flush()
 

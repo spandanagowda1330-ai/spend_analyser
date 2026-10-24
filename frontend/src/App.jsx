@@ -10,17 +10,9 @@ import {
   YAxis,
 } from "recharts";
 import Insights from "./Insights";
+import { money, setCurrency } from "./format";
 
 const API = "http://localhost:8000";
-
-const money = (n) =>
-  n == null
-    ? "-"
-    : "$" +
-      Number(n).toLocaleString(undefined, {
-        minimumFractionDigits: 2,
-        maximumFractionDigits: 2,
-      });
 
 async function get(path) {
   const res = await fetch(`${API}${path}`);
@@ -44,11 +36,14 @@ export default function App() {
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [version, setVersion] = useState(0);
+  const [spendSign, setSpendSign] = useState("auto");
+  const [dateOrder, setDateOrder] = useState("auto");
 
   const loadAll = useCallback(async () => {
     try {
-      const [overview, monthly, categories, subs, merchants, spikes] =
+      const [config, overview, monthly, categories, subs, merchants, spikes] =
         await Promise.all([
+          get("/config"),
           get("/analytics/overview"),
           get("/analytics/monthly"),
           get("/categories/summary"),
@@ -56,6 +51,7 @@ export default function App() {
           get("/analytics/top-merchants"),
           get("/analytics/spikes"),
         ]);
+      setCurrency(config.currency_symbol);
       setData({ overview, monthly, categories, subs, merchants, spikes });
       setError("");
     } catch {
@@ -77,9 +73,11 @@ export default function App() {
     setError("");
     setNotice("");
     try {
-      setBusy("Uploading...");
+      setBusy("Reading file...");
       const form = new FormData();
       form.append("file", file);
+      form.append("spend_sign", spendSign);
+      form.append("date_order", dateOrder);
       const up = await fetch(`${API}/upload`, { method: "POST", body: form });
       if (!up.ok) {
         const err = await up.json().catch(() => ({}));
@@ -98,8 +96,12 @@ export default function App() {
       setVersion((v) => v + 1);
 
       await loadAll();
+      const d = result.detected;
       setNotice(
-        `Imported ${result.imported} new transactions (${result.skipped_duplicates} duplicates skipped).`
+        `Imported ${result.imported} new transactions (${result.skipped_duplicates} duplicates skipped, ` +
+          `${result.skipped_invalid} non-spending rows ignored). ` +
+          `Read: date "${d.date_column}", description "${d.description_column}", ` +
+          `dates ${d.date_order}; ${d.amount_mode}.`
       );
     } catch (err) {
       setError(err.message);
@@ -109,7 +111,32 @@ export default function App() {
     }
   }
 
+  async function clearData() {
+    const ok = window.confirm(
+      "Delete all transactions, subscriptions and insights? This cannot be undone."
+    );
+    if (!ok) return;
+    setError("");
+    setNotice("");
+    try {
+      setBusy("Clearing...");
+      const res = await fetch(`${API}/data`, { method: "DELETE" });
+      if (!res.ok) throw new Error("Could not clear the data");
+      setVersion((v) => v + 1);
+      await loadAll();
+      setNotice("All data cleared. Upload a statement to start again.");
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setBusy("");
+    }
+  }
+
   const empty = data && data.overview.transactions === 0;
+  const billCount = data
+    ? data.subs.subscriptions.filter((s) => s.kind === "bill").length
+    : 0;
+  const subCount = data ? data.subs.subscriptions.length - billCount : 0;
   const subShare =
     data && data.overview.average_per_month
       ? Math.round(
@@ -124,10 +151,56 @@ export default function App() {
           <h1>Spend Analyzer</h1>
           <p>Find your subscriptions, understand your spending, save money.</p>
         </div>
-        <label className={`btn ${busy ? "disabled" : ""}`}>
-          {busy || "Upload CSV"}
-          <input type="file" accept=".csv" onChange={handleUpload} />
-        </label>
+
+        <div className="actions">
+          <details className="options">
+            <summary>Options</summary>
+            <div className="options-body">
+              <label>
+                Spending in the file is
+                <select
+                  value={spendSign}
+                  onChange={(e) => setSpendSign(e.target.value)}
+                >
+                  <option value="auto">Auto-detect</option>
+                  <option value="negative">Negative numbers</option>
+                  <option value="positive">Positive numbers</option>
+                </select>
+              </label>
+              <label>
+                Dates are written
+                <select
+                  value={dateOrder}
+                  onChange={(e) => setDateOrder(e.target.value)}
+                >
+                  <option value="auto">Auto-detect</option>
+                  <option value="dayfirst">Day first (31/12/2026)</option>
+                  <option value="monthfirst">Month first (12/31/2026)</option>
+                </select>
+              </label>
+              <div className="muted small">
+                Only change these if the results look wrong.
+              </div>
+            </div>
+          </details>
+
+          <button
+            className="btn-secondary"
+            onClick={clearData}
+            disabled={!!busy || !data}
+          >
+            Clear data
+          </button>
+
+          <label className={`btn ${busy ? "disabled" : ""}`}>
+            {busy || "Upload statement"}
+            <input
+              type="file"
+              accept=".csv,.txt,.xlsx,.xlsm"
+              onChange={handleUpload}
+            />
+          </label>
+        </div>
       </div>
 
       {error && <div className="banner error">{error}</div>}
@@ -139,8 +212,9 @@ export default function App() {
         <div className="card empty" style={{ marginTop: 16 }}>
           <h2>No transactions yet</h2>
           <p className="muted">
-            Click <b>Upload CSV</b> and choose a file with the columns date,
-            description and amount.
+            Click <b>Upload statement</b> and choose a bank or credit-card
+            statement (CSV or Excel). The app finds the date, description and
+            amount columns by itself.
           </p>
         </div>
       )}
@@ -167,7 +241,14 @@ export default function App() {
             <Stat
               label="Subscriptions per year"
               value={money(data.subs.total_annual_cost)}
-              hint={`${data.subs.subscriptions.length} active or recent`}
+              hint={
+                `${subCount} subscriptions` +
+                (billCount > 0
+                  ? `, plus ${billCount} recurring bills (${money(
+                      data.subs.bills_monthly_cost
+                    )}/month)`
+                  : "")
+              }
             />
           </div>
 
@@ -217,50 +298,69 @@ export default function App() {
           </div>
 
           <div className="card" style={{ marginTop: 16 }}>
-            <h2>Subscriptions</h2>
-            <div className="table-wrap">
-              <table>
-                <thead>
-                  <tr>
-                    <th>Merchant</th>
-                    <th>Frequency</th>
-                    <th className="num">Amount</th>
-                    <th className="num">Per year</th>
-                    <th>Last charged</th>
-                    <th>Flags</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {data.subs.subscriptions.map((s) => (
-                    <tr key={s.id}>
-                      <td>{s.merchant}</td>
-                      <td>{s.frequency}</td>
-                      <td className="num">{money(s.amount)}</td>
-                      <td className="num">{money(s.annual_cost)}</td>
-                      <td>{s.last_charged}</td>
-                      <td>
-                        {s.price_change > 0 && (
-                          <span className="badge warn">
-                            Price up {money(s.price_change)}
-                          </span>
-                        )}
-                        {s.price_change < 0 && (
-                          <span className="badge good">
-                            Price down {money(Math.abs(s.price_change))}
-                          </span>
-                        )}
-                        {s.status === "possibly_cancelled" && (
-                          <span className="badge bad">Maybe cancelled</span>
-                        )}
-                        {s.status === "active" && !s.price_change && (
-                          <span className="badge good">Active</span>
-                        )}
-                      </td>
+            <h2>Subscriptions and recurring bills</h2>
+            {data.subs.subscriptions.length === 0 ? (
+              <p className="muted">
+                No recurring charges found. A subscription needs at least 3
+                monthly charges (or 4 weekly, or 2 yearly) with a similar
+                amount, so a short statement may not show any.
+              </p>
+            ) : (
+              <div className="table-wrap">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Merchant</th>
+                      <th>Type</th>
+                      <th>Frequency</th>
+                      <th className="num">Amount</th>
+                      <th className="num">Per year</th>
+                      <th>Last charged</th>
+                      <th>Flags</th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+                  </thead>
+                  <tbody>
+                    {data.subs.subscriptions.map((s) => (
+                      <tr key={s.id}>
+                        <td>{s.merchant}</td>
+                        <td>{s.kind === "bill" ? "Bill" : "Subscription"}</td>
+                        <td>{s.frequency}</td>
+                        <td className="num">{money(s.amount)}</td>
+                        <td className="num">{money(s.annual_cost)}</td>
+                        <td>{s.last_charged}</td>
+                        <td>
+                          {s.price_change > 0 && (
+                            <span className="badge warn">
+                              Price up {money(s.price_change)}
+                            </span>
+                          )}
+                          {s.price_change < 0 && (
+                            <span className="badge good">
+                              Price down {money(Math.abs(s.price_change))}
+                            </span>
+                          )}
+                          {s.extra_charges > 0 && (
+                            <span className="badge bad">
+                              {s.extra_charges} extra charge
+                              {s.extra_charges > 1 ? "s" : ""} (
+                              {money(s.extra_amount)})
+                            </span>
+                          )}
+                          {s.status === "possibly_cancelled" && (
+                            <span className="badge bad">Maybe cancelled</span>
+                          )}
+                          {s.status === "active" &&
+                            !s.price_change &&
+                            !s.extra_charges && (
+                            <span className="badge good">Active</span>
+                          )}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
           </div>
 
           <div className="grid two">

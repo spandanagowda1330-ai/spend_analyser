@@ -1,15 +1,10 @@
 import { useEffect, useState } from "react";
+import { money } from "./format";
 
 const API = "http://localhost:8000";
 
-const money = (n) =>
-  "$" +
-  Number(n).toLocaleString(undefined, {
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
-  });
-
 const LABELS = {
+  duplicate: { text: "Extra charge", cls: "bad" },
   overlap: { text: "Overlap", cls: "warn" },
   forgotten: { text: "Forgotten?", cls: "warn" },
   price_hike: { text: "Price increase", cls: "warn" },
